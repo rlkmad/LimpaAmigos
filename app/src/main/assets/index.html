@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Limpa Amigos</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--card2:#20242d;--txt:#f2f4f8;--mut:#8b93a3;--acc:#4f8cff;--red:#e5484d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Roboto,sans-serif}
+button{font:inherit;border:0;border-radius:12px;padding:13px 16px;font-weight:600;color:#fff;background:var(--card2)}
+button:disabled{opacity:.4}
+.screen{height:100%;display:flex;flex-direction:column}
+#login{align-items:center;justify-content:center;text-align:center;padding:28px;gap:14px}
+#login h1{margin:0;font-size:26px}
+#login p{margin:0;color:var(--mut);line-height:1.45;max-width:320px}
+#loginMsg{color:var(--red)}
+.primary{background:var(--acc)}.danger{background:var(--red)}
+.outline{background:transparent;border:1.5px solid var(--red);color:var(--red)}
+header{padding:14px 16px 8px;display:flex;align-items:center;gap:10px}
+header .t{flex:1;min-width:0}
+header b{display:block;font-size:18px}
+header span{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+header button{padding:8px 12px;font-size:13px}
+.tools{padding:4px 16px 10px;display:flex;gap:8px}
+.tools input{flex:1;min-width:0;background:var(--card);border:1px solid var(--card2);border-radius:12px;color:var(--txt);padding:11px 14px;font-size:15px;outline:none}
+.tools button{padding:10px 12px;font-size:13px;white-space:nowrap}
+#list{flex:1;overflow-y:auto;padding:0 12px 8px}
+.row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:14px;padding:10px 12px;margin-bottom:8px;border:1.5px solid transparent}
+.row.on{border-color:var(--red);background:#2a1a1d}
+.ck{width:22px;height:22px;border-radius:7px;border:2px solid var(--mut);flex:none;position:relative}
+.row.on .ck{background:var(--red);border-color:var(--red)}
+.row.on .ck::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;border:solid #fff;border-width:0 2.5px 2.5px 0;transform:rotate(45deg)}
+.av{width:52px;height:52px;border-radius:50%;background:var(--card2);object-fit:cover;flex:none}
+.nm{min-width:0}
+.nm b,.nm span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nm span{color:var(--mut);font-size:13px;margin-top:2px}
+.empty{color:var(--mut);text-align:center;padding:40px 20px}
+.bar{padding:10px 12px 14px;background:var(--bg);border-top:1px solid var(--card2);display:flex;flex-direction:column;gap:8px}
+.bar button{width:100%}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:24px;z-index:10}
+.box{background:var(--card);border-radius:18px;padding:20px;width:100%;max-width:360px}
+.box h2{margin:0 0 8px;font-size:19px}
+.box p{margin:0 0 16px;color:var(--mut);line-height:1.45;white-space:pre-line}
+.box .btns{display:flex;gap:8px}.box .btns button{flex:1}
+.prog{height:10px;background:var(--card2);border-radius:6px;overflow:hidden;margin:0 0 14px}
+.prog div{height:100%;width:0;background:var(--red);transition:width .2s}
+</style></head><body>
+
+<div id="login" class="screen" hidden>
+  <h1>Limpa Amigos</h1>
+  <p>Conecte sua conta do Roblox para ver sua lista de amigos e remover vários de uma vez.</p>
+  <p style="font-size:13px">O login é feito na página oficial do Roblox. Sua senha não passa pelo app.</p>
+  <button class="primary" id="btnLogin">Conectar conta do Roblox</button>
+  <p id="loginMsg"></p>
+</div>
+
+<div id="main" class="screen" hidden>
+  <header>
+    <div class="t"><b id="who">…</b><span id="count"></span></div>
+    <button id="btnOut">Sair</button>
+  </header>
+  <div class="tools">
+    <input id="q" type="search" placeholder="Buscar amigo…" autocomplete="off">
+    <button id="btnAll">Selecionar todos</button>
+  </div>
+  <div id="list"></div>
+  <div class="bar">
+    <button class="danger" id="btnSel" disabled>Remover selecionados (0)</button>
+    <button class="outline" id="btnEvery" disabled>Remover TODOS</button>
+  </div>
+</div>
+
+<div id="modal" class="modal" hidden><div class="box">
+  <h2 id="mT"></h2><p id="mP"></p>
+  <div class="prog" id="mBar" hidden><div></div></div>
+  <div class="btns" id="mB"></div>
+</div></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const pending={};let seq=0;
+window.__cb=(id,status,text)=>{const p=pending[id];if(!p)return;delete pending[id];p({status,text});};
+function api(method,url,body){return new Promise(res=>{const id=String(++seq);pending[id]=res;Native.request(id,method,url,body||'');});}
+
+let me=null,friends=[],sel=new Set(),q='',cancel=false;
+
+function show(id){$('#login').hidden=id!=='login';$('#main').hidden=id!=='main';}
+
+function dialog(title,text,buttons,bar){
+  $('#mT').textContent=title;$('#mP').textContent=text;$('#mBar').hidden=!bar;
+  const b=$('#mB');b.replaceChildren();
+  return new Promise(res=>{
+    buttons.forEach(([label,cls,val])=>{
+      const x=document.createElement('button');x.textContent=label;if(cls)x.className=cls;
+      x.onclick=()=>{$('#modal').hidden=true;res(val);};b.append(x);
+    });
+    $('#modal').hidden=false;
+  });
+}
+function setProg(t,p,btnLabel){$('#mT').textContent='Removendo amizades…';$('#mP').textContent=t;$('#mBar div').style.width=p+'%';}
+
+function filtered(){const t=q.trim().toLowerCase();return friends.filter(f=>!t||f.name.toLowerCase().includes(t)||f.displayName.toLowerCase().includes(t));}
+
+function updateBar(){
+  const fl=filtered();
+  $('#count').textContent=friends.length+' amigos';
+  $('#btnSel').textContent='Remover selecionados ('+sel.size+')';
+  $('#btnSel').disabled=sel.size===0;
+  $('#btnEvery').textContent='Remover TODOS ('+friends.length+')';
+  $('#btnEvery').disabled=friends.length===0;
+  const allOn=fl.length>0&&fl.every(f=>sel.has(f.id));
+  $('#btnAll').textContent=allOn?'Limpar seleção':'Selecionar todos';
+  $('#btnAll').disabled=fl.length===0;
+}
+
+function render(){
+  const list=$('#list');list.replaceChildren();
+  const fl=filtered();
+  if(!fl.length){const e=document.createElement('div');e.className='empty';e.textContent=friends.length?'Nenhum amigo encontrado.':'Sua lista de amigos está vazia.';list.append(e);}
+  for(const f of fl){
+    const row=document.createElement('div');row.className='row'+(sel.has(f.id)?' on':'');
+    const ck=document.createElement('div');ck.className='ck';
+    const img=document.createElement('img');img.className='av';img.alt='';img.loading='lazy';if(f.img)img.src=f.img;
+    const box=document.createElement('div');box.className='nm';
+    const d=document.createElement('b');d.textContent=f.displayName;
+    const u=document.createElement('span');u.textContent='@'+f.name;
+    box.append(d,u);row.append(ck,img,box);
+    row.onclick=()=>{sel.has(f.id)?sel.delete(f.id):sel.add(f.id);row.classList.toggle('on');updateBar();};
+    list.append(row);
+  }
+  updateBar();
+}
+
+async function loadThumbs(){
+  for(let i=0;i<friends.length;i+=100){
+    const chunk=friends.slice(i,i+100);
+    let todo=chunk;
+    for(let t=0;t<3&&todo.length;t++){
+      const r=await api('GET','https://thumbnails.roblox.com/v1/users/avatar-headshot?size=150x150&format=Png&isCircular=false&userIds='+todo.map(f=>f.id).join(','));
+      if(r.status===200){
+        const map={};JSON.parse(r.text).data.forEach(d=>{if(d.state==='Completed'&&d.imageUrl)map[d.targetId]=d.imageUrl;});
+        todo.forEach(f=>{if(map[f.id])f.img=map[f.id];});
+        todo=todo.filter(f=>!f.img);
+      }
+      if(todo.length)await sleep(1500);
+    }
+    render();
+  }
+}
+
+async function load(){
+  show('main');$('#who').textContent='Carregando…';$('#count').textContent='';$('#list').replaceChildren();
+  const r=await api('GET','https://users.roblox.com/v1/users/authenticated');
+  if(r.status===401){Native.logout();show('login');$('#loginMsg').textContent='Sessão expirada. Conecte novamente.';return;}
+  if(r.status!==200){return fail('Não foi possível carregar a conta (erro '+r.status+'). Verifique a internet.');}
+  me=JSON.parse(r.text);
+  $('#who').textContent=me.displayName+' (@'+me.name+')';
+  const f=await api('GET','https://friends.roblox.com/v1/users/'+me.id+'/friends');
+  if(f.status!==200){return fail('Não foi possível carregar os amigos (erro '+f.status+').');}
+  friends=JSON.parse(f.text).data.map(x=>({id:x.id,name:x.name,displayName:x.displayName||x.name,img:''}));
+  friends.sort((a,b)=>a.displayName.localeCompare(b.displayName,'pt',{sensitivity:'base'}));
+  sel=new Set();render();loadThumbs();
+}
+async function fail(msg){
+  const v=await dialog('Ops',msg,[['Sair','','out'],['Tentar de novo','primary','retry']]);
+  if(v==='retry')load();else{Native.logout();show('login');}
+}
+
+async function removeIds(ids){
+  cancel=false;let done=0,dead=false;const failed=[],removed=new Set();
+  $('#mB').replaceChildren();$('#mBar').hidden=false;$('#modal').hidden=false;
+  const cb=document.createElement('button');cb.textContent='Cancelar';cb.onclick=()=>{cancel=true;cb.disabled=true;};$('#mB').append(cb);
+  for(const id of ids){
+    if(cancel||dead)break;
+    setProg((done+1)+' de '+ids.length,done/ids.length*100);
+    let ok=false,tries=0,code=0;
+    while(tries<4){
+      const r=await api('POST','https://friends.roblox.com/v1/users/'+id+'/unfriend','');
+      code=r.status;
+      if(code===200){ok=true;break;}
+      if(code===429){tries++;await sleep(4000*tries);continue;}
+      if(code===401)dead=true;
+      break;
+    }
+    if(ok)removed.add(id);else if(!dead)failed.push(id);
+    done++;
+    await sleep(700);
+  }
+  friends=friends.filter(f=>!removed.has(f.id));
+  removed.forEach(id=>sel.delete(id));
+  render();
+  let msg=removed.size+' amizade(s) removida(s).';
+  if(failed.length)msg+='\n'+failed.length+' não puderam ser removidas (limite do Roblox ou verificação exigida). Tente de novo mais tarde.';
+  if(cancel)msg+='\nOperação cancelada.';
+  if(dead)msg+='\nSua sessão expirou. Conecte a conta de novo.';
+  await dialog('Concluído',msg,[['Fechar','primary',1]],false);
+  if(dead){Native.logout();show('login');}
+}
+
+$('#btnLogin').onclick=()=>{$('#loginMsg').textContent='';Native.login();};
+window.onLoggedIn=load;
+$('#btnOut').onclick=async()=>{
+  const v=await dialog('Sair da conta?','Você será desconectado do Roblox neste app.',[['Cancelar','',0],['Sair','danger',1]]);
+  if(v){Native.logout();friends=[];sel=new Set();show('login');}
+};
+$('#q').oninput=e=>{q=e.target.value;render();};
+$('#btnAll').onclick=()=>{
+  const fl=filtered();const allOn=fl.every(f=>sel.has(f.id));
+  fl.forEach(f=>allOn?sel.delete(f.id):sel.add(f.id));render();
+};
+$('#btnSel').onclick=async()=>{
+  const n=sel.size;
+  const v=await dialog('Remover '+n+' amizade(s)?','Essas pessoas serão removidas da sua lista de amigos. Para voltar a ser amigo, será preciso enviar um novo pedido.',[['Cancelar','',0],['Remover','danger',1]]);
+  if(v)removeIds([...sel]);
+};
+$('#btnEvery').onclick=async()=>{
+  const n=friends.length;
+  const v=await dialog('Remover TODOS os '+n+' amigos?','Isso apaga toda a sua lista de amigos e não pode ser desfeito.',[['Cancelar','',0],['Remover todos','danger',1]]);
+  if(!v)return;
+  const v2=await dialog('Tem certeza?','Última confirmação: remover '+n+' amizades agora.',[['Voltar','',0],['Sim, remover tudo','danger',1]]);
+  if(v2)removeIds(friends.map(f=>f.id));
+};
+
+(function init(){
+  if(typeof Native!=='undefined'&&Native.hasSession())load();else show('login');
+})();
+</script></body></html>

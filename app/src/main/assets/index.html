@@ -83,7 +83,7 @@ const pending={};let seq=0;
 window.__cb=(id,status,text)=>{const p=pending[id];if(!p)return;delete pending[id];p({status,text});};
 function api(method,url,body){return new Promise(res=>{const id=String(++seq);pending[id]=res;Native.request(id,method,url,body||'');});}
 
-let me=null,friends=[],sel=new Set(),q='',cancel=false;
+let nameErr='',me=null,friends=[],sel=new Set(),q='',cancel=false;
 
 function show(id){$('#login').hidden=id!=='login';$('#main').hidden=id!=='main';}
 
@@ -104,7 +104,7 @@ function filtered(){const t=q.trim().toLowerCase();return friends.filter(f=>!t||
 
 function updateBar(){
   const fl=filtered();
-  $('#count').textContent=friends.length+' amigos';
+  $('#count').textContent=friends.length+' amigos · v1.1'+(nameErr?' · nomes: erro '+nameErr:'');
   $('#btnSel').textContent='Remover selecionados ('+sel.size+')';
   $('#btnSel').disabled=sel.size===0;
   $('#btnEvery').textContent='Remover TODOS ('+friends.length+')';
@@ -149,6 +149,18 @@ async function loadThumbs(){
   }
 }
 
+async function loadNames(){
+  for(let i=0;i<friends.length;i+=100){
+    const chunk=friends.slice(i,i+100);
+    const r=await api('POST','https://users.roblox.com/v1/users',JSON.stringify({userIds:chunk.map(f=>f.id),excludeBannedUsers:false}));
+    if(r.status===200){
+      const m={};JSON.parse(r.text).data.forEach(u=>{m[u.id]=u;});
+      chunk.forEach(f=>{const u=m[f.id];if(u){f.name=u.name;f.displayName=u.displayName||u.name;}});
+    }else nameErr=String(r.status);
+  }
+  friends.forEach(f=>{if(!f.name)f.name='id'+f.id;if(!f.displayName)f.displayName=f.name;});
+}
+
 async function load(){
   show('main');$('#who').textContent='Carregando…';$('#count').textContent='';$('#list').replaceChildren();
   const r=await api('GET','https://users.roblox.com/v1/users/authenticated');
@@ -158,7 +170,9 @@ async function load(){
   $('#who').textContent=me.displayName+' (@'+me.name+')';
   const f=await api('GET','https://friends.roblox.com/v1/users/'+me.id+'/friends');
   if(f.status!==200){return fail('Não foi possível carregar os amigos (erro '+f.status+').');}
-  friends=JSON.parse(f.text).data.map(x=>({id:x.id,name:x.name,displayName:x.displayName||x.name,img:''}));
+  friends=JSON.parse(f.text).data.map(x=>({id:x.id,name:x.name||'',displayName:x.displayName||x.name||'',img:''}));
+  $('#count').textContent='Carregando nomes…';
+  await loadNames();
   friends.sort((a,b)=>a.displayName.localeCompare(b.displayName,'pt',{sensitivity:'base'}));
   sel=new Set();render();loadThumbs();
 }
@@ -167,31 +181,49 @@ async function fail(msg){
   if(v==='retry')load();else{Native.logout();show('login');}
 }
 
+const csleep=async ms=>{const end=Date.now()+ms;while(Date.now()<end&&!cancel)await sleep(Math.min(250,Math.max(1,end-Date.now())));};
+
 async function removeIds(ids){
-  cancel=false;let done=0,dead=false;const failed=[],removed=new Set();
+  cancel=false;
+  let done=0,dead=false,stop=false,pauseUntil=0,backoff=3000,streak=0;
+  const total=ids.length,failed=[],removed=new Set(),queue=[...ids];
   $('#mB').replaceChildren();$('#mBar').hidden=false;$('#modal').hidden=false;
-  const cb=document.createElement('button');cb.textContent='Cancelar';cb.onclick=()=>{cancel=true;cb.disabled=true;};$('#mB').append(cb);
-  for(const id of ids){
-    if(cancel||dead)break;
-    setProg((done+1)+' de '+ids.length,done/ids.length*100);
-    let ok=false,tries=0,code=0;
-    while(tries<4){
-      const r=await api('POST','https://friends.roblox.com/v1/users/'+id+'/unfriend','');
-      code=r.status;
-      if(code===200){ok=true;break;}
-      if(code===429){tries++;await sleep(4000*tries);continue;}
-      if(code===401)dead=true;
-      break;
+  const cb=document.createElement('button');cb.textContent='Cancelar';
+  cb.onclick=()=>{cancel=true;cb.disabled=true;cb.textContent='Cancelando…';};$('#mB').append(cb);
+  const upd=extra=>{
+    $('#mT').textContent='Removendo amizades…';
+    $('#mP').textContent=done+' de '+total+(extra?'\n'+extra:'');
+    $('#mBar div').style.width=(done/total*100)+'%';
+  };
+  upd();
+  async function worker(){
+    while(!cancel&&!dead&&!stop){
+      const id=queue.shift();if(id===undefined)return;
+      let ok=false,tries=0,code=0;
+      while(!cancel&&!dead&&!stop){
+        const w=pauseUntil-Date.now();
+        if(w>0){upd('Aguardando limite do Roblox ('+Math.ceil(w/1000)+'s)…');await csleep(Math.min(w,1000));continue;}
+        const r=await api('POST','https://friends.roblox.com/v1/users/'+id+'/unfriend','');
+        code=r.status;
+        if(code===200){ok=true;backoff=Math.max(3000,backoff*0.8);break;}
+        if(code===429){pauseUntil=Math.max(pauseUntil,Date.now()+backoff);backoff=Math.min(backoff*2,30000);if(++tries>=6)break;continue;}
+        if(code===401)dead=true;
+        break;
+      }
+      if(!ok&&(cancel||dead||stop))return;
+      if(ok){removed.add(id);streak=0;}
+      else{failed.push(id);if(code!==429&&++streak>=5)stop=true;}
+      done++;upd();
+      await csleep(120);
     }
-    if(ok)removed.add(id);else if(!dead)failed.push(id);
-    done++;
-    await sleep(700);
   }
+  await Promise.all([worker(),worker(),worker()]);
   friends=friends.filter(f=>!removed.has(f.id));
   removed.forEach(id=>sel.delete(id));
   render();
   let msg=removed.size+' amizade(s) removida(s).';
-  if(failed.length)msg+='\n'+failed.length+' não puderam ser removidas (limite do Roblox ou verificação exigida). Tente de novo mais tarde.';
+  if(failed.length)msg+='\n'+failed.length+' não puderam ser removidas. Tente de novo mais tarde.';
+  if(stop)msg+='\nParei porque o Roblox recusou várias seguidas (pode estar pedindo verificação).';
   if(cancel)msg+='\nOperação cancelada.';
   if(dead)msg+='\nSua sessão expirou. Conecte a conta de novo.';
   await dialog('Concluído',msg,[['Fechar','primary',1]],false);

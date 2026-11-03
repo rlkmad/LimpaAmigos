@@ -33,7 +33,7 @@ public class MainActivity extends Activity {
             + "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
     private WebView web;
-    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+    private final ExecutorService pool = Executors.newFixedThreadPool(8);
     private volatile String csrf = "";
 
     @Override protected void onCreate(Bundle b) {
